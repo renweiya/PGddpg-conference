@@ -1,0 +1,563 @@
+# -*- coding: utf-8 -*-
+import os
+
+import pickle
+
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'  # 使用 GPU 0 or -1 #laker denote
+import tensorflow as tf
+import numpy as np
+import algorithm.common.tf_utils as tf_utils
+import time
+import random
+
+# read input cmd from standard input device
+flags = tf.app.flags
+
+import datetime
+DATETIME = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+# Game parameter
+flags.DEFINE_string('env_name', 'predator_prey', 'env used')
+# flags.DEFINE_string('env_name', 'round_up_rs', 'env used') #round_up_base ,round_up_rs，predator_prey
+flags.DEFINE_bool('render', False, 'whether to render the scenario')
+flags.DEFINE_integer('num_adversaries', 3, 'num_adversaries')#3
+flags.DEFINE_integer('num_good_agents', 1, 'num_good_agents')#1
+flags.DEFINE_integer('num_landmarks', 0, 'num_landmarks')#1
+flags.DEFINE_integer('max_step_before_punishment', 8, 'max_step_before_punishment')#modify 8
+flags.DEFINE_bool('reload_prey', True, 'whether to reload the pre-trained prey model')
+flags.DEFINE_bool('train_prey', False ,'whether to reload the pre-trained prey model')
+flags.DEFINE_string('prey_model_path', './tools/prey/model-prey-s',
+                    'path of the pre-trained prey model')
+flags.DEFINE_bool('reload_predator', False, 'whether to reload the pre-trained predator model')
+flags.DEFINE_string('predator_model_path', './exp_result/round_up/pre_train_prey/saved_models/seed_ddpg_81/model-87000',
+                    'path of the pre-trained predator model')
+flags.DEFINE_integer('seed', 1, 'random seed')
+
+# Training parameters
+flags.DEFINE_bool('learning', True, 'train the agents')
+flags.DEFINE_string('exp_name', '3v1_rs1', 'exp_name') #can defined by yourself
+flags.DEFINE_string('predator_policy', 'maddpg', 'predator_policy: [maddpg, ddpg, pgmaddpg, random, fixed, ddpg]') # maddpg\ddpg\pgmaddpg
+flags.DEFINE_float('rs_alpha', 1 , 'rs_alpha')
+flags.DEFINE_float('rlpl_beta', 0.5, 'rlpl_beta') #jone   # 0 < rlpl_beta < 1 , if rlpl_beta < 0 pgddpg rlpl_beta_dec 
+flags.DEFINE_string('prey_policy', 'ddpg', 'prey_policy: [random, fixed, ddpg]')
+flags.DEFINE_integer('episodes', 500000, 'maximum training episode')#140000
+flags.DEFINE_integer('max_episode_len', 200, 'maximum step of each episode')#modify 60
+flags.DEFINE_float('ddpg_plr', 0.01, 'policy learning rate')
+flags.DEFINE_float('ddpg_qlr', 0.001, 'critic learning rate')
+flags.DEFINE_float('gamma', 0.99, 'discount factor')
+flags.DEFINE_float('tau', 0.01, 'target network update frequency')
+flags.DEFINE_integer('target_update_interval', 1, 'target network update frequency')
+flags.DEFINE_float('return_confidence_factor', 0.7, 'return_confidence_factor')
+flags.DEFINE_integer('batch_size', 1024, 'batch size')
+flags.DEFINE_integer('n_train_repeat', 1, 'repeated sample times at each training time')
+flags.DEFINE_integer('save_checkpoint_every_epoch', 2000, 'save_checkpoint_every_epoch')#5000
+flags.DEFINE_integer('plot_reward_recent_mean', 1000, 'show the avg reward of recent 200 episode')
+flags.DEFINE_bool('save_return', True, 'save trajectory Return by default')
+flags.DEFINE_float('lambda1', 0., 'n-step return')
+flags.DEFINE_float('lambda1_max', 1., 'n-step return')
+flags.DEFINE_float('lambda2', 1e-6, 'coefficient of regularization')
+
+# GASIL
+flags.DEFINE_bool('consider_state_action_confidence', True, 'The closer (state, action) to the end state the important')
+flags.DEFINE_float('state_action_confidence', 0.8, 'discount factor of (state, action)')
+flags.DEFINE_float('state_action_confidence_max', 1., 'discount factor of (state, action)')
+flags.DEFINE_integer('gradually_inc_start_episode', 0,
+                     'increase parameters start at ${gradually_inc_start_episode} episode')
+flags.DEFINE_integer('gradually_inc_within_episode', 12000,
+                     'increase parameters in ${gradually_inc_within_episode} episode')
+flags.DEFINE_integer('inc_or_dec_step', 1000, 'natural_exp_inc parameter: inc_step')
+flags.DEFINE_float('d_lr', 0.001, 'discriminator learning rate')
+flags.DEFINE_float('imitation_lambda', 0., 'coefficient of imitation learning')
+flags.DEFINE_float('imitation_lambda_max', 1., 'maximum coefficient of imitation learning')
+flags.DEFINE_integer('train_discriminator_k', 1, 'train discriminator net k times at each update')
+flags.DEFINE_integer('gan_batch_size', 8, 'batch_size of training GAN')#laker 8
+
+# experience replay
+flags.DEFINE_integer('buffer_size', 300000, 'buffer size')
+flags.DEFINE_integer('min_buffer_size', 30000, 'minimum buffer size before training')#laker 30000
+flags.DEFINE_integer('positive_buffer_size', 32, 'buffer size')#laker 32
+flags.DEFINE_integer('min_positive_buffer_size', 32, 'min buffer size before training')#laker 32
+# prioritized
+flags.DEFINE_bool('prioritized_er', False, 'whether to use prioritized ER')
+flags.DEFINE_float('alpha', 0.6, 'how much prioritization is used (0 - no prioritization, 1 - full prioritization)')
+flags.DEFINE_float('beta', 0.4, 'To what degree to use importance weights (0 - no corrections, 1 - full correction)')
+
+# Net structure
+flags.DEFINE_integer('num_units', 128, 'layer neuron number')#laker 32
+flags.DEFINE_integer('num_units_ma', 256, 'layer neuron number for multiagent alg')#laker 64
+flags.DEFINE_integer('h_layer_num', 2, 'hidden layer num')
+
+FLAGS = flags.FLAGS  # alias
+# Model saving dir
+if FLAGS.predator_policy[0:6] =="pgddpg" or FLAGS.predator_policy[0:8] =="pgmaddpg":
+    if FLAGS.rlpl_beta>=0 and FLAGS.rlpl_beta<=1:
+        suffix = "_{}".format(FLAGS.rlpl_beta) 
+    elif FLAGS.rlpl_beta<0:
+        suffix = "_dec"
+    else :
+        print("*-*-*-*--rlpl_beta error*-*-*-*-*-*-*-*-")
+else:
+    suffix = ''
+flags.DEFINE_string('model_save_dir', './exp_result/{}/saved_models/{}/seed_{}/{}/model'.format(FLAGS.exp_name,FLAGS.env_name, FLAGS.predator_policy+suffix,DATETIME),
+                    'Model saving dir')
+flags.DEFINE_string('learning_curve_dir', './exp_result/{}/learning_curves/{}/seed_{}/{}'.format(FLAGS.exp_name,FLAGS.env_name, FLAGS.predator_policy+suffix,DATETIME),
+                    'learning_curve_dir')
+flags.DEFINE_string('tensorboard_dir', './exp_result/{}/tensorboard_dir/{}/seed_{}/{}'.format(FLAGS.exp_name,FLAGS.env_name, FLAGS.predator_policy+suffix,DATETIME),
+                    'tensorboard_dir')
+FLAGS = flags.FLAGS  # alias
+# init tf summaries
+summary_path = FLAGS.learning_curve_dir
+# init tf summaries
+tensorboard_dir = FLAGS.tensorboard_dir
+# init tf model_path
+model_path = FLAGS.model_save_dir
+print('||||||||||||||||||--------Log Path------||||||||||||||||||')
+print('summary_path', summary_path)
+print('tensorboard_dir', tensorboard_dir)
+print('model_path', model_path)
+print('||||||||||||||||||--------Log Path------||||||||||||||||||')
+
+def make_env(scenario_name, max_step_before_punishment):
+    '''
+    Creates a MultiAgentEnv object as env. This can be used similar to a gym
+    environment by calling env.reset() and env.step().
+    Use env.render() to view the environment on the screen.
+
+    Input:
+        scenario_name   :   name of the scenario from ./scenarios/ to be Returns
+                            (without the .py extension)
+        benchmark       :   whether you want to produce benchmarking data
+                            (usually only done during evaluation)
+
+    Some useful env properties (see environment.py):
+        .observation_space  :   Returns the observation space for each agent
+        .action_space       :   Returns the action space for each agent
+        .n                  :   Returns the number of Agents
+    '''
+    from env.multiagent.environment import MultiAgentEnv
+    import env.multiagent.scenarios as scenarios
+
+    # load scenario from script
+    # scenario = scenarios.load(scenario_name + ".py").Scenario() # modify
+    scenario = scenarios.load(scenario_name + ".py").Scenario()
+    scenario.max_step_before_punishment = max_step_before_punishment
+    
+    #add by laker
+    scenario.num_adversaries=FLAGS.num_adversaries
+    scenario.num_good_agents=FLAGS.num_good_agents
+    scenario.successed_round_up=FLAGS.num_adversaries
+    scenario.num_landmarks=FLAGS.num_landmarks
+    scenario.good_colors = [np.array([0x00, 0x99, 0xff]) / 255] * FLAGS.num_good_agents
+    #add end
+    print('==============================================================')
+    print('max_step_before_punishment: ', scenario.max_step_before_punishment)
+    print('==============================================================')
+
+    # create world
+    world = scenario.make_world()
+    # create multiagent environment
+    env = MultiAgentEnv(world, scenario.reset_world, scenario.reward, scenario.observation,
+                        info_callback=scenario.collision_number,
+                        done_callback=scenario.done,
+                        shared_viewer=True,#modify share view or not
+                        other_callbacks=[scenario.set_arrested_pressed_watched])
+    return env
+
+
+def build_agents(action_dim_n, observation_dim_n, policies_name):
+    '''
+    build agents
+    :param action_dim_n:
+    :param observation_dim_n:
+    :param policies_name:
+    :return:
+    '''
+    from algorithm.trainer import SimpleAgentFactory
+    agents = []
+    obs_shape_n = [[dim] for dim in observation_dim_n]
+    
+    
+    for agent_idx, policy_name in enumerate(policies_name):
+        agent = SimpleAgentFactory.createAgent(agent_idx, policy_name, obs_shape_n, action_dim_n, FLAGS)
+        agents.append(agent)
+    return agents
+
+
+def reload_previous_models(session, env):
+    import gc
+    # 加载提前训练好的 prey 策略
+    if FLAGS.reload_prey:
+        prey_vars = []
+        for idx in range(FLAGS.num_adversaries, env.n):#range(2,5)
+            var = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='agent_{}'.format(idx))
+            prey_vars += var
+
+        saver_prey = tf.train.Saver(var_list=prey_vars)
+        saver_prey.restore(session, FLAGS.prey_model_path)
+
+        print('[prey] successfully reload previously saved ddpg model({})...'.format(FLAGS.prey_model_path))
+        del saver_prey
+        gc.collect()
+        # all the predator using the same policy
+        # best_agent = agents[base_kwargs['num_adversaries']]
+        # for i in range(base_kwargs['num_adversaries'], env.n):
+        #     agents[i] = best_agent
+
+    if FLAGS.reload_predator:
+        predator_vars = []
+        for idx in range(FLAGS.num_adversaries):
+            var = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='agent_{}'.format(idx))
+            predator_vars += var
+        saver_predator = tf.train.Saver(var_list=predator_vars)
+        saver_predator.restore(session, FLAGS.predator_model_path)
+        print('[predator] successfully reload previously saved RL model({})...'.format(
+            FLAGS.predator_model_path
+        ))
+        del saver_predator
+        gc.collect()
+
+
+def train():
+    # init env
+    env = make_env(FLAGS.env_name, FLAGS.max_step_before_punishment)
+    env = env.unwrapped
+    # set env seed
+    np.random.seed(FLAGS.seed)
+    random.seed(FLAGS.seed)
+    tf.set_random_seed(FLAGS.seed)
+    print("Using seed {} ...".format(FLAGS.seed))
+
+    print('There are total {} agents.'.format(env.n))
+    obs_shape_n = [env.observation_space[i].shape[0] for i in range(env.n)]
+    action_shpe_n = [2] * env.n
+    print('obs_shape_n: ', obs_shape_n)  # [16, 16, 16, 14]
+    print(action_shpe_n)  # [5, 5, 5, 5]
+
+    adv_policies = [FLAGS.predator_policy] * FLAGS.num_adversaries
+    good_policies = [FLAGS.prey_policy] * FLAGS.num_good_agents
+    print(adv_policies + good_policies)
+
+    with tf_utils.make_session().as_default() as sess:
+        # init agents
+        agents = build_agents(action_shpe_n, obs_shape_n, adv_policies + good_policies)
+        
+        summary_writer = tf.summary.FileWriter(tensorboard_dir)
+        adv_mean_options, adv_mean_phs = [], []
+        adv_episode_options, adv_episode_phs = [], []
+        prey_mean_options, prey_mean_phs = [], []
+        prey_episode_options, prey_episode_phs = [], []
+        agent0_pool_mean_return_ph = tf.placeholder(dtype=tf.float32, shape=[], name='agent0_pool_mean_return')
+        agent0_pool_mean_return_option = tf.summary.scalar('agent0_pool_mean_return', agent0_pool_mean_return_ph)
+        agent1_pool_mean_return_ph = tf.placeholder(dtype=tf.float32, shape=[], name='agent1_pool_mean_return')
+        agent1_pool_mean_return_option = tf.summary.scalar('agent1_pool_mean_return', agent1_pool_mean_return_ph)
+        agent0_positive_pool_mean_return_ph = tf.placeholder(dtype=tf.float32, shape=[],
+                                                             name='agent0_positive_pool_mean_return')
+        agent0_positive_pool_mean_return_option = tf.summary.scalar('agent0_positive_pool_mean_return',
+                                                                    agent0_positive_pool_mean_return_ph)
+        agent1_positive_pool_mean_return_ph = tf.placeholder(dtype=tf.float32, shape=[],
+                                                             name='agent1_positive_pool_mean_return')
+        agent1_positive_pool_mean_return_option = tf.summary.scalar('agent1_positive_pool_mean_return',
+                                                                    agent1_positive_pool_mean_return_ph)
+        agent0_imitation_lambda = tf.placeholder(dtype=tf.float32, shape=[], name='agent0_imitation_lambda')
+        agent0_imitation_lambda_option = tf.summary.scalar('agent0_imitation_lambda', agent0_imitation_lambda)
+        agent0_state_action_confidence = tf.placeholder(dtype=tf.float32, shape=[],
+                                                        name='agent0_state_action_confidence')
+        agent0_state_action_confidence_option = tf.summary.scalar('agent0_state_action_confidence',
+                                                                  agent0_state_action_confidence)
+
+        for idx in range(FLAGS.num_adversaries):
+
+            ad_fp_reward_1000_mean = tf.placeholder(dtype=tf.float32, shape=[],
+                                                    name='ad_{}_fp_reward_{}_mean'.format(idx,
+                                                                                          FLAGS.plot_reward_recent_mean))
+            ad_fp_reward_1000_mean_op = tf.summary.scalar(
+                'adversary {} episode reward {} mean'.format(idx, FLAGS.plot_reward_recent_mean),
+                ad_fp_reward_1000_mean)
+            ad_fp_reward_episode = tf.placeholder(dtype=tf.float32, shape=[],
+                                                  name='ad_{}_fp_reward_episode'.format(idx))
+            ad_fp_reward_episode_op = tf.summary.scalar('adversary {} episode reward'.format(idx), ad_fp_reward_episode)
+            adv_mean_phs.append(ad_fp_reward_1000_mean)
+            adv_mean_options.append(ad_fp_reward_1000_mean_op)
+            adv_episode_phs.append(ad_fp_reward_episode)
+            adv_episode_options.append(ad_fp_reward_episode_op)
+        for idx in range(FLAGS.num_good_agents):
+            prey_fp_reward_1000_mean = tf.placeholder(dtype=tf.float32, shape=[],
+                                                      name='prey_{}_fp_reward_{}_mean'.format(idx,
+                                                                                              FLAGS.plot_reward_recent_mean))
+            prey_fp_reward_1000_mean_op = tf.summary.scalar(
+                'prey {} episode reward {} mean'.format(idx, FLAGS.plot_reward_recent_mean),
+                prey_fp_reward_1000_mean)
+            prey_fp_reward_episode = tf.placeholder(dtype=tf.float32, shape=[],
+                                                    name='prey_{}_fp_reward_episode'.format(idx))
+            prey_fp_reward_episode_op = tf.summary.scalar('prey {} episode reward'.format(idx), prey_fp_reward_episode)
+            prey_mean_phs.append(prey_fp_reward_1000_mean)
+            prey_mean_options.append(prey_fp_reward_1000_mean_op)
+            prey_episode_phs.append(prey_fp_reward_episode)
+            prey_episode_options.append(prey_fp_reward_episode_op)
+
+        # build model saver
+        # max_to_keep:Maximum number of recent checkpoints to keep.
+        saver = tf.train.Saver(max_to_keep=int(FLAGS.episodes / (FLAGS.save_checkpoint_every_epoch))) #modify by laker
+
+        # reload previous prey and predator model
+        reload_previous_models(session=sess, env=env)
+
+        # Initialize uninitialized variables.
+        tf_utils.initialize(sess=sess)
+        # assert using same session
+        same_session(sess, agents)
+        #  make the tensor graph unchangeable
+        sess.graph.finalize()
+
+        # collect some statistical data
+        episode_rewards = [0.0]  # sum of rewards for all agents
+        agent_rewards = [[0.0] for _ in range(env.n)]  # individual agent reward
+        agent_episode_rewards = [[0.0] for _ in range(env.n)]
+        losses_transformation = [[] for _ in range(FLAGS.num_adversaries)]
+        coordination_reach_times = [[0] for _ in range(FLAGS.num_good_agents)]
+        coordination_times = 0
+        miss_coordination_times = 0
+        total_times = 0
+
+        obs_n = env.reset() #observations 18,18,16,16,16
+        episode_step = 0  # step for each episode
+        train_step = 0  # total training step
+        t_start = time.time()
+        print('Starting iterations...')
+        sucess_rate=[]
+        sucess_record=[]
+        while len(episode_rewards) <= FLAGS.episodes:#140000
+            # increment global step counter
+            train_step += 1
+            # if FLAGS.render and len(episode_rewards) % 100 == 0: # delete by laker
+            #     time.sleep(0.3)
+            #     env.render()
+            
+            action_2_dim_n = [agent.get_actions(observations=[obs], single=True) for agent, obs in zip(agents, obs_n)]
+
+            action_n = [[0, a[0], 0, a[1], 0] for a in action_2_dim_n]
+
+            # environment step
+            #modify by laker
+            # if FLAGS.render and len(episode_rewards) % 100 == 0:
+            #     new_obs_n, rew_n, done_n, info_n = env.step(action_n, restrict_move=True, printing=True)
+            # else:
+            #     new_obs_n, rew_n, done_n, info_n = env.step(action_n, restrict_move=True, printing=False)
+
+
+            new_obs_n, rew_n, done_n, info_n = env.step(action_n, restrict_move=True)
+
+            info_n = info_n['n']
+            episode_step += 1
+
+            done = all(done_n)  # 达到任务
+            terminal = (episode_step >= FLAGS.max_episode_len)  # 最大步数
+            ended = done or terminal
+            #add by laker
+            if ended:
+                sucess_rate.append(done)
+                
+            # modify: add by laker: render after the step. important
+            show_fre=100
+            if FLAGS.render and len(episode_rewards) % show_fre == 0: # modify
+                time.sleep(0.3)
+                env.render()
+            
+            if len(episode_rewards) % show_fre == 0: # modify
+                if ended==True:
+                    print("done?",done,terminal)
+                    length_k=show_fre
+                    if len(sucess_rate)>length_k:
+                        print("sucess rate",sum(sucess_rate[-length_k:])/len(sucess_rate[-length_k:]))
+                        sucess_record.append(sum(sucess_rate[-length_k:])/len(sucess_rate[-length_k:]))
+                
+                if episode_step >= FLAGS.max_episode_len:
+                    print("max steps",episode_step)
+
+            # collect experience
+            if FLAGS.learning:
+                for i, agent in enumerate(agents):
+
+                    #modify by laker: all learning
+                    if FLAGS.train_prey==True:
+                        agent.experience(obs_n[i], action_2_dim_n[i], rew_n[i], new_obs_n[i], ended)                
+                    # prey is fixed---#modify by laker: all learning
+                    elif i < FLAGS.num_adversaries:
+                        agent.experience(obs_n[i], action_2_dim_n[i], rew_n[i], new_obs_n[i], ended)
+
+            # step forward observations
+            obs_n = new_obs_n
+
+            # TODO: 这里记录每一轮最大reward
+            # record some analysis information
+            for i, rew in enumerate(rew_n):
+                episode_rewards[-1] += rew #lastest reward sum for each step of all agent
+                agent_episode_rewards[i].append(rew)
+                agent_rewards[i][-1] += rew #lastest reward sum for each step of each agent
+
+            for discrete_action in range(FLAGS.num_good_agents):
+                # print("######")
+                coordination_reach_times[discrete_action][-1] += info_n[0][discrete_action]
+            # add some log and records...
+            if ended:
+                # print log for debugging......
+                if len(episode_rewards) % show_fre == 0:
+                    print('process {}, episode {}: '.format(os.getpid(), len(episode_rewards)))
+                    print("")
+                    print("")
+                # reset environment
+                
+                obs_n = env.reset()
+                # reset episode tags
+                episode_step = 0
+                episode_rewards.append(0)  # reset sum rewards #laker another episode
+                for idx, a in enumerate(agent_rewards):  # reset each agent's reward
+                    a.append(0)
+                agent_episode_rewards = [[0.0] for _ in range(env.n)]
+                for coord_count in coordination_reach_times:  # reset coordination times
+                    coord_count.append(0)
+
+            # do training
+            if FLAGS.learning:
+                for i in range(FLAGS.n_train_repeat):
+                    loss_and_positive_loss, trained = [], False
+                    for idx, agent in enumerate(agents):
+                        if FLAGS.train_prey==False and idx >= FLAGS.num_adversaries: #modify
+                            continue
+                        loss = agent.do_training(agents=agents, iteration=train_step, episode=len(episode_rewards))
+                        loss_and_positive_loss.append(loss)
+                        trained = loss is not None
+
+                if trained:
+                    for idx in range(FLAGS.num_adversaries):
+                        losses_transformation[idx].append(loss_and_positive_loss[idx])
+
+                # add summary
+                if ended and len(episode_rewards) % 10 == 0:
+                    # agent buffer avg return
+                    summary_writer.add_summary(sess.run(agent0_pool_mean_return_option,
+                                                        {agent0_pool_mean_return_ph: agents[
+                                                            0].pool.current_mean_return}),
+                                               len(episode_rewards))
+
+                    summary_writer.add_summary(sess.run(agent1_pool_mean_return_option,
+                                                        {agent1_pool_mean_return_ph: agents[
+                                                            1].pool.current_mean_return}),
+                                               len(episode_rewards))
+
+                    for idx in range(FLAGS.num_adversaries):
+                        summary_writer.add_summary(sess.run(adv_mean_options[idx], {
+                            adv_mean_phs[idx]: np.mean(
+                                agent_rewards[idx][-FLAGS.plot_reward_recent_mean - 1: -1])}),
+                                                   len(episode_rewards))
+                        summary_writer.add_summary(
+                            sess.run(adv_episode_options[idx], {adv_episode_phs[idx]: agent_rewards[idx][-2]}),
+                            len(episode_rewards))
+
+                    # add summary for drawing curves (prey)
+                    for idx in range(FLAGS.num_good_agents):
+                        summary_writer.add_summary(sess.run(prey_mean_options[idx], {
+                            prey_mean_phs[idx]: np.mean(
+                                agent_rewards[idx + FLAGS.num_adversaries][
+                                -FLAGS.plot_reward_recent_mean - 1: -1])
+                        }), len(episode_rewards))
+                        summary_writer.add_summary(
+                            sess.run(prey_episode_options[idx], {
+                                prey_episode_phs[idx]: agent_rewards[idx + FLAGS.num_adversaries][-2]
+                            }), len(episode_rewards))
+
+                # save models
+                if ended and len(episode_rewards) % FLAGS.save_checkpoint_every_epoch == 0:
+                    # save model
+
+                    save_model(saver, sess, len(episode_rewards))
+
+                if ended and len(episode_rewards) %  show_fre == 0:#laker just print
+                    # print("sucess_record*-*-*-*-*-*-**",sucess_record)
+                    if sucess_record:
+                        train_episode_summary = tf.Summary()
+                        train_episode_summary.value.add(simple_value=sucess_record[-1], tag="sucess_record")#
+                        summary_writer.add_summary(train_episode_summary, len(episode_rewards))         #add success rate
+                    print("steps: {}, episodes: {}, mean episode reward: {}, agent episode reward: {}, time: {}".format(
+                        train_step, len(episode_rewards),
+                        np.mean(episode_rewards[-FLAGS.save_checkpoint_every_epoch:]),
+                        [np.mean(rew[-FLAGS.save_checkpoint_every_epoch:]) for rew in agent_rewards],
+                        round(time.time() - t_start, 3)))
+                    t_start = time.time()
+        
+                # record
+                if FLAGS.learning and len(episode_rewards) %  show_fre == 0:
+                    record_logs(**{
+                        'summary_path': summary_path,
+                        'agent_rewards': agent_rewards,
+                        'coordination_reach_times': coordination_reach_times,
+                        'agents': agents,
+                        'losses_transformation': losses_transformation,
+                        'sucess_record': sucess_record,
+                    })
+        print("finished")
+        # close sess
+        sess.close()
+
+        # # record
+        # if FLAGS.learning:
+        #     record_logs(**{
+        #         'summary_path': summary_path,
+        #         'agent_rewards': agent_rewards,
+        #         'coordination_reach_times': coordination_reach_times,
+        #         'agents': agents,
+        #         'losses_transformation': losses_transformation,
+        #     })
+
+
+def save_model(saver, sess, episode):
+    # model_path = FLAGS.model_save_dir.format(FLAGS.env_name, FLAGS.predator_policy, FLAGS.seed)
+    if not os.path.exists(model_path):
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
+    saver.save(sess, model_path, global_step=episode)
+
+    
+def record_logs(**kwargs):
+    log_path = kwargs['summary_path'] 
+    if not os.path.exists(log_path):
+        os.makedirs(log_path, exist_ok=True)
+
+    presetting_parameters_log_file_name = log_path + '/' + FLAGS.env_name + '_presetting_parameters_log.txt' 
+    with open(presetting_parameters_log_file_name, 'w') as fp:
+        # pickle.dump(kwargs['agent_rewards'], fp)
+        for attr, value in FLAGS.flag_values_dict().items():
+            # print("{}={}".format(attr, value))
+            fp.write("{}\t{}\n".format(attr, value))
+
+    losses_transformation_file_name = log_path + '/' + FLAGS.env_name + '_losses_transformation.pkl'
+    with open(losses_transformation_file_name, 'wb') as fp:
+        pickle.dump(kwargs['losses_transformation'], fp)
+
+    rew_file_name = log_path + '/' + FLAGS.env_name + '_rewards.pkl'
+    with open(rew_file_name, 'wb') as fp:
+        pickle.dump(kwargs['agent_rewards'], fp)
+        
+    rate_file_name = log_path + '/' + FLAGS.env_name + '_sucess_record.pkl'
+    with open(rate_file_name, 'wb') as fp:
+        pickle.dump(kwargs['sucess_record'], fp)
+
+    coordination_reach_times_file = log_path + '/' + FLAGS.env_name + '_coordination_reach_times.pkl'
+    with open(coordination_reach_times_file, 'wb') as fp:
+        pickle.dump(kwargs['coordination_reach_times'], fp)
+
+    buffer_mean = log_path + '/' + FLAGS.env_name + '_buffer.pkl'
+    with open(buffer_mean, 'wb') as fp:
+        pickle.dump(kwargs['agents'][0].pool.mean_returns, fp)
+    # print("Mean buffer return:")
+    # print(kwargs['agents'][0].pool.mean_returns)
+
+
+# for debug below ..........................................................
+def same_session(sess, agents):
+    for agent in agents[:FLAGS.num_adversaries]:
+        if sess != agent.get_session():
+            print("Session error (diff tf session)")
+    print("The same session.........................")
+
+
+if __name__ == '__main__':
+    train()
