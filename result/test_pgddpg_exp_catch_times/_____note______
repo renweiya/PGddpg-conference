@@ -1,0 +1,156 @@
+2020-8-28
+放弃掉的旧版本，
+distributions2.py 中 simple中的方向探索，只能执行一次。应当用placeholder的方式传值
+不受bug影响的只有pgddpg10 纯用规则追到的平均步数为73步
+
+2020-9-1
+weak prey
+1-2 maddpg-rs
+3-4 pgmaddpg
+5-6 pgddpg 
+7-8 ddpg-rs
+
+9-1 22:00
+update distributions2  高斯噪声
+
+1-2 maddpg-rs
+3-4 ddpg-rs
+5-6 pgddpg 
+7-8 pgmaddpg
+
+
+9-1 23:00
+update plan model
+1 pgddpg
+2 pgmaddpg
+3 maddpg
+4 ddpg
+
+9-2 11:00
+plan_model add forceAPF
+add success rate to tensorboard
+add rlpl_beta for pgddpg_dec(rlpl_beta < 0) and pgddpg_0-9 (rlpl_beta = 0.1- 0.9)
+
+
+9-2 11:40
+
+6 ddpg round_up_reward_shaping
+7 ddpg round_up_reward_shaping_10
+8 ddpg round_up_reward_shaping_5
+9 ddpg round_up_reward_shaping_01
+
+
+9-2 15:40
+update name save_dir
+add presetting parameters log
+
+
+9-2 23:20
+update  pgmaddpg  unit 256
+1 ddpg base---------------- maddpg rs001
+2 maddpg base-------------- maddpg rs05
+3 pgddpg05 base------------ pgddpg00 base
+4 pgddpg_dec base----------
+5 ddpg rs------------------ ddpg round_up_rewaed_shaping_dist------------
+6 ddpg rs01
+7 ddpg rs5
+8 ddpg rs10
+9 maddpg rs
+10 maddpg rs01------------ maddpg round_up_rewaed_shaping_dist-----------
+11 maddpg rs10
+
+9-3 15:00
+update show.py modify action , no noise
+
+9-4 09:00
+from 3.1
+update RS
+    shape_rew += (agent.dist-dist_) * 1 * abs(angle_cos)### 以距离靠近为主要标准，才是势函数
+add  round_up_reward_shaping_S.py    agent.max_dist_ 
+
+9-4 14:00
+1 ddpg rs
+2 maddpg rs
+3 ddpg rs_S
+4 maddpg rs_S
+5 ddpg rs01
+6 ddpg rs5
+7 ddpg rs10
+8 maddpg rs_001
+9 maddpg rs_01
+10 maddpg rs_5
+11 maddpg rs_10
+
+9-4 14:00
+from 3.3 prey speed up
+ 
+1 pgddpg05 base
+2 ddpg rs
+3 ddpg rs5
+4 ddpg rs10
+没有优势
+
+9-5 12:00
+**-*-*-*-prey——s
+agent.max_speed = 0.5 if agent.adversary else 0.6#jine
+
+1 pgddpg05 base    fail
+2 ddpg rs10
+3 ddpg rs5
+4 ddpg rs
+
+APF_potential=APF_potential*100 #jone
+5 pgddpg05 base    fail
+
+9-7 14:00
+APF_potential=APF_potential*100 #jone  qudiao 
+benchmark fix policy
+./exp_result/prey/model-prey-23'************
+agent.max_speed = 0.5 if agent.adversary else 0.7
+
+1 ddpg rs
+2 ddpg rs5
+3 ddpg rs10
+4 pgddpg base
+
+9-8 9:00
+./exp_result/prey/model-prey-s'************
+
+1 ddpg rs10
+2 ddpg rs5
+3 ddpg rs10
+4 ddpg rs100
+5 maddpg rs
+6 maddpg rs10
+
+./exp_result/prey/model-prey-s'************
+
+1 ddpg rs
+2 ddpg rs01
+3 maddpg rs100
+4 maddpg rs01
+5 maddpg rs001
+7 maddpg rs5
+
+
+9-10 23:00
+
+1-10 ddpg rs5    all  preys
+10-20 maddpg rs5    all  preys
+   *-*-*-*add
+21 python run_ddpg_designed.py      00000
+22 python run_maddpg_designed.py    00000
+
+
+9-11   15:00
+1  python run_ddpg_designed.py      fixpolicy2     3.6w  cut
+2  python run_maddpg_designed.py    fixpolicy2 3.6w  cut
+3  python run_ddpg_designed.py      fixpolicy2 3.6w  cut
+4  python run_maddpg_designed.py    fixpolicy2 3.6w  cut
+
+ddpg_rs1   prey01-09
+6-15
+
+
+9-14   11:00
+test_all model
