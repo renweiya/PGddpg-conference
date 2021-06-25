@@ -1,34 +1,74 @@
+# Independent Deep Deterministic Policy Gradient Reinforcement Learning in Cooperative Multiagent Pursuit Games
 
-#Instruction 
-在Igasil的基础上做了一些改进和优化；
-在场景中增加了多追一的追捕场景；
-在算法中增加了我们提出的PGDDPG方法；
-增加了一些数据处理的工具；
+This is code for ”Independent Deep Deterministic Policy Gradient Reinforcement Learning in Cooperative Multiagent Pursuit Games“.
 
-* 增加设置是否使用reward shaping的控制变量
-* 增加设置rs的比例
-* 增加设置障碍物数量
-* 增加测试胜率的模块
+## Instruction 
+
+We have made some improvements and optimizations on the basis of [Igasil](https://raw.githubusercontent.com/tjuHaoXiaotian/GASIL).
+In the scene, a more difficult "predator-prey" scene is added. Only by catching the prey together can the predator get the reward.
+The PGDDPG method we proposed is added to the `algorithm`. Futhermore, Some data processing tools are added;
+
+*Add control parameter to set whether to use reward shaping
+
+*Add the parameter to set the proportion of reward shaping
+
+*Increase the parameter of setting the number of obstacles
+
+*Add the parameters of the test winning module
 ...
 
+## Code Structure
 
-#Code Structure
-"algorithm" 算法模块
-"env" 环境
-"result" 我们的训练数据
-"tools" 一些数据展示的工具，和我们在试验中用到的猎物
+"algorithm" Algorithm module
 
-#Have a try
-`run_ma_ddpg.py` run ddpg\maddpg
+"env" Experimental environment
 
-`run_pgddpg_0.5` bate = 0.5
+"result" Our training data
 
-`run_pgddpg_dec.py` bate 递减
+"tools" are some data display tools, which we used in our experiments
 
-`run_pgddpg_vs_fixp.py` 与固定规则对手训练
+`run_ma_ddpg.py`: run ddpg\maddpg
 
-`show.py` 展示一次训练的render
+`run_pgddpg_0.5`: bate = 0.5
 
-`test_ones.py` 测试一个prey model模型对抗的成功率
+`run_pgddpg_dec.py`: Bate decrement
 
-`test_success_rate_all.py` 测试所有与多个prey model对抗的成功率
+`run_pgddpg_vs_fixp.py`: Training with regular opponents
+
+`show.py`: Show a render of training
+
+`test_ones.py`: Test the success rate against one prey model
+
+`test_success_rate_all.py`: Test the success rate of all models against multiple prey models
+
+## Have a try
+
+You can run `run_ma_ddpg.py` , `run_pgddpg_0.5`,`run_pgddpg_dec.py` or `run_pgddpg_vs_fixp.py` , which preset the parameters,directly. Or you can modify the parameter settings as needed in `run_XXXXX.py`.
+
+Note that if you want to test your model, you can set `render` to `true`， `train_prey`and `learning` to `false`.
+
+## Experiments and results
+<center>
+
+![img](./img/MPE_environment.png)
+
+The MPE environment with 3 obstacles.
+
+![img](./img/successful_capture.png)
+
+The number of successful capture (cooperation) for algorithms over 2,000 steps.
+
+</center>
+
+![image](./img/easy_reward_all.png)
+<center>In the predator-prey game with MPE,
+a personal reward of +1 is given even if only one agent catches the prey (an intermediate event before the final state). The dashed lines correspond to the average rewards for the DDPG and MADDPG with personal rewards. The solid lines correspond to the
+rates of successful capture for the DDPG and MADDPG with personal rewards.</center>
+
+![image](./img/all_preys.svg)
+<center>The rates of successful capture for the PGDDPG (β = 0.8), DDPG(α = 1), and MADDPG (α = 5) in the predator-prey game with MPE. Each algorithm was individually trained on all ten prey. To clearly show the differences between different algorithms, we use different colours to represent different algorithms. The solid
+line represents the mean, while the shadow represents the variance.</center>
+
+![image](./img/seed_adv_std.svg)
+<center>The rates of successful capture for each algorithm when trained with 10 different seeds in the predator-prey game with MPE. The red curves correspond to the PGDDPG (β = 0.8), the green curves correspond to MADDPG (α = 5), and the blue curves correspond to DDPG (α = 1).</center>
+ 
