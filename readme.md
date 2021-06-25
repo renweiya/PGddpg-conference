@@ -55,7 +55,9 @@ Note that if you want to test your model, you can set `render` to `true`， `tra
 The MPE environment with 3 obstacles.
 
 ![img](./img/successful_capture.png)
+
 The number of successful capture (cooperation) for algorithms over 2,000 steps.
+
 </center>
 
 ![image](./img/easy_reward_all.png)
