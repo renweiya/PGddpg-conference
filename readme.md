@@ -4,7 +4,7 @@ This is the code for the paper 'Independent Deep Deterministic Policy Gradient R
 
 ## Instruction 
 
-We have made some improvements and optimizations on the basis of [Igasil](https://raw.githubusercontent.com/tjuHaoXiaotian/GASIL).
+We have made some improvements and optimizations on the basis of [Igasil](https://raw.githubusercontent.com/tjuHaoXiaotian/GASIL) and the_arxiv_paper(https://github.com/renweiya/PGDDPG).
 In the scene, a more difficult "predator-prey" scene is added. Only by catching the prey together can the predator get the reward.
 The PGDDPG method we proposed is added to the `algorithm`. Futhermore, Some data processing tools are added;
 
